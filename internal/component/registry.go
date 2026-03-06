@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/go-kit/log"
-	"github.com/grafana/alloy/internal/featuregate"
 	"github.com/grafana/regexp"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
+
+	"github.com/grafana/alloy/internal/featuregate"
 )
 
 // The parsedName of a component is the parts of its name ("remote.http") split
@@ -168,26 +169,34 @@ func (r Registration) CloneArguments() Arguments {
 //
 // NOTE: the above panics will trigger during the integration tests if the registrations are invalid.
 func Register(r Registration) {
+	if err := TryRegister(r); err != nil {
+		panic(err)
+	}
+}
+
+// TryRegister performs component registration and returns an error on failure.
+func TryRegister(r Registration) error {
 	if _, exist := registered[r.Name]; exist {
-		panic(fmt.Sprintf("Component name %q already registered", r.Name))
+		return fmt.Errorf("Component name %q already registered", r.Name)
 	}
 	switch {
 	case !r.Community && r.Stability == featuregate.StabilityUndefined:
-		panic(fmt.Sprintf("Component %q has an undefined stability level - please provide stability level when registering the component", r.Name))
+		return fmt.Errorf("Component %q has an undefined stability level - please provide stability level when registering the component", r.Name)
 	case r.Community && r.Stability != featuregate.StabilityUndefined:
-		panic(fmt.Sprintf("Community component %q has a defined stability level - community components are not subject to this stability level setting. It should remain `undefined`", r.Name))
+		return fmt.Errorf("Community component %q has a defined stability level - community components are not subject to this stability level setting. It should remain `undefined`", r.Name)
 	}
 
 	parsed, err := parseComponentName(r.Name)
 	if err != nil {
-		panic(fmt.Sprintf("invalid component name %q: %s", r.Name, err))
+		return fmt.Errorf("invalid component name %q: %s", r.Name, err)
 	}
 	if err := validatePrefixMatch(parsed, parsedNames); err != nil {
-		panic(err)
+		return err
 	}
 
 	registered[r.Name] = r
 	parsedNames[r.Name] = parsed
+	return nil
 }
 
 var identifierRegex = regexp.MustCompile("^[A-Za-z][0-9A-Za-z_]*$")
@@ -299,7 +308,6 @@ func NewRegistryMap(
 	community bool,
 	registrations map[string]Registration,
 ) Registry {
-
 	return &registryMap{
 		registrations: registrations,
 		minStability:  minStability,
