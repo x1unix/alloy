@@ -1065,6 +1065,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/therootcompany/xz v1.0.1 // indirect
+	github.com/traefik/yaegi v0.16.2-0.20260209085605-fcb76d1ece0c // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect
 	github.com/wasilibs/go-re2 v1.9.0 // indirect
