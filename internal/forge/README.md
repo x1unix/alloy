@@ -87,11 +87,9 @@ otelcol.receiver:
     properties:
       starttime:
         type: int64
-        pointer: true   # maps as *int64
 
       endtime:
         type: int64
-        pointer: true
 
       s3downloader:
         type: object
@@ -148,7 +146,6 @@ Forge uses a two-step process to translate Alloy config into the component's Go 
 | Field      | Description |
 |------------|-------------|
 | `type`     | Scalar type (`string`, `bool`, `int64`, `float64`) or `object` for nested structs |
-| `pointer`  | When `true`, the value is mapped as a pointer (e.g. `*int64`) |
 | `block`    | When `true`, the property is exposed as a nested River block in the Alloy config rather than an attribute |
 | `required` | List of property names that must be present |
 | `properties` | Nested property definitions (valid when `type: object`) |
@@ -188,6 +185,7 @@ The following packages are pre-exported by the Forge loader:
 | `unsafe` | Required by some OTel components for low-level memory operations |
 | `go.opentelemetry.io/collector/...` | Core OTel Collector types: `component`, `consumer`, `receiver`, `exporter`, `pdata`, etc. |
 | `go.uber.org/zap` | Structured logging, used widely across OTel Collector components |
+| `github.com/mitchellh/mapstructure` | Used internally by the config mapper and available to plugins that need to decode nested structures manually |
 
 Packages outside this list are not available to Yaegi unless they are explicitly added to the symbol table. This is intentional: limiting the available surface area reduces the risk of interpreted code calling into host internals unexpectedly.
 

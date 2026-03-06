@@ -53,10 +53,8 @@ otelcol.receiver:
     properties:
       starttime:
         type: int64
-        pointer: true
       endtime:
         type: int64
-        pointer: true # Map as a pointer - *int64
       s3downloader:
         type: object
         block: true # Whether to expect an Alloy River block.
