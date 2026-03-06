@@ -1,0 +1,99 @@
+# Example Forge component.
+# Provides awss3 receiver.
+name: forge.source.awss3
+stability: experimental
+community: true
+
+# Component type.
+#
+# Can be: "alloy", "otelcol.receiver", "otelcol.exporter".
+# At the moment, only "otelcol.receiver" is supported.
+type: otelcol.receiver
+
+# Package source info
+source:
+  import: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awss3receiver
+
+  # Go module version, optional.
+  #version: latest
+
+  # Name of a package to import. Used if Go module name differs from a package name.
+  # By default, package name is infered from the import path.
+  #packageName: awss3receiver
+
+  # Load sources from a local directory, used for development.
+  #dir: ../syslogreceiver
+
+# OTel receiver-specific parameters.
+# Block corresponds to "type" value below.
+otelcol.receiver:
+  # Code snippet to get receiver factory.
+  # The source is automatically imported using the `source.packageName`.
+  #
+  # For otel receivers, the expected return type is receiver.Factory.
+  # See: go.opentelemetry.io/collector/receiver
+  factory: |
+    return awss3receiver.NewFactory()
+
+  # Component config schema. Similar to JSON schema.
+  # Used to generate Alloy to OTel component config
+  config:
+    # Destination Go type to unmarshal config.
+    #
+    # Forge assumes that most otelcol components have `mapstructure` tags that allow easy mapping.
+    # Under the hood, Forge first converts Alloy's river config into a map and then will call mapstructure to map a config
+    # to a given type.
+    type: "*awss3receiver.Config"
+
+    # List of required fields.
+    # Similar
+    required:
+      - s3downloader
+
+    properties:
+      starttime:
+        type: int64
+        pointer: true
+      endtime:
+        type: int64
+        pointer: true # Map as a pointer - *int64
+      s3downloader:
+        type: object
+        block: true # Whether to expect an Alloy River block.
+        required:
+          - s3_prefix
+          - s3_bucket
+        properties:
+          region:
+            type: string
+          s3_bucket:
+            type: string
+          s3_prefix:
+            type: string
+          s3_partition_format:
+            type: string
+          s3_partition_timezone:
+            type: string
+          file_prefix:
+            type: string
+          file_prefix_include_telemetry_type:
+            type: bool
+          endpoint:
+            type: string
+          endpoint_partition_id:
+            type: string
+          s3_force_path_style:
+            type: bool
+        sqs:
+          type: object
+          properties:
+            queue_url:
+              type: string
+            region:
+              type: string
+            endpoint:
+              type: string
+            wait_time_seconds:
+              type: int64
+            max_number_of_messages:
+              type: int64
