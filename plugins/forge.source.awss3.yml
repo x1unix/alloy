@@ -82,16 +82,16 @@ otelcol.receiver:
             type: string
           s3_force_path_style:
             type: bool
-        sqs:
-          type: object
-          properties:
-            queue_url:
-              type: string
-            region:
-              type: string
-            endpoint:
-              type: string
-            wait_time_seconds:
-              type: int64
-            max_number_of_messages:
-              type: int64
+          sqs:
+            type: object
+            properties:
+              queue_url:
+                type: string
+              region:
+                type: string
+              endpoint:
+                type: string
+              wait_time_seconds:
+                type: int64
+              max_number_of_messages:
+                type: int64
