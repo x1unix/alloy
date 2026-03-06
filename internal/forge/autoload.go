@@ -10,4 +10,5 @@ type LoadConfig struct {
 
 // Load loads and registers dynamic components.
 func Load(cfg LoadConfig) error {
+	return nil
 }
