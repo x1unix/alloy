@@ -1,0 +1,18 @@
+// Forge demo: receive syslog messages via UDP and forward to debug exporter.
+//
+// Usage:
+//   ALLOY_FORGE_DIR=./example/forge/plugins alloy run ./example/forge/config.alloy
+
+forge.source.syslog "udp_logs" {
+  protocol = "rfc5424"
+
+  udp {
+    listen_address = "127.0.0.1:43210"
+  }
+
+  output {
+    logs = [otelcol.exporter.debug.default.input]
+  }
+}
+
+otelcol.exporter.debug "default" {}
