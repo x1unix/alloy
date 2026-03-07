@@ -35,6 +35,7 @@ import (
 	"github.com/grafana/alloy/internal/converter"
 	convert_diag "github.com/grafana/alloy/internal/converter/diag"
 	"github.com/grafana/alloy/internal/featuregate"
+	"github.com/grafana/alloy/internal/forge"
 	"github.com/grafana/alloy/internal/readyctx"
 	alloy_runtime "github.com/grafana/alloy/internal/runtime"
 	"github.com/grafana/alloy/internal/runtime/logging"
@@ -395,6 +396,16 @@ func (fr *alloyRun) Run(cmd *cobra.Command, configPath string) error {
 
 	labelService := labelstore.New(l, reg, !fr.enableDirectFanout)
 	alloyseed.Init(fr.storagePath, l)
+
+	// Load Forge plugins before the runtime starts so dynamically registered
+	// components are available to the controller.
+	forgeCfg := forge.LoadConfigFromEnv()
+	if _, statErr := os.Stat(forgeCfg.PluginsDir); statErr == nil {
+		if forgeErr := forge.Load(forgeCfg); forgeErr != nil {
+			return fmt.Errorf("forge: %w", forgeErr)
+		}
+		level.Info(l).Log("msg", "forge plugins loaded", "dir", forgeCfg.PluginsDir)
+	}
 
 	f, err := alloy_runtime.New(alloy_runtime.Options{
 		Logger:               l,

@@ -59,8 +59,77 @@ Create `internal/forge/manifest/manifest_test.go` covering:
 - [x] **Missing factory**: `otelcol.receiver` block present but `factory` empty is rejected
 - [x] **Missing required block**: `type: otelcol.receiver` but no `otelcol.receiver` block is rejected
 
-### Notes
+---
 
-- The dot in `otelcol.receiver` as a YAML key needs care. The standard `gopkg.in/yaml.v3` decoder will treat it as a plain string key, so a struct field tag `yaml:"otelcol.receiver"` works — just verify this with a quick test.
-- `PropertySchema.Properties` being recursive (`map[string]PropertySchema`) means the type references itself; this is fine in Go but requires the map value to not be a pointer (or use `map[string]*PropertySchema` if you prefer).
-- Keep `Parse` and `Validate` separate so callers can load manifests without validation (e.g. for tooling or testing partial manifests).
+## Step 2: Yaegi interpreter setup (`internal/forge/capsule`)
+
+- [x] Create interpreter with `interp.New(interp.Options{...})`
+- [x] Export standard library symbols via `stdlib.Symbols`
+- [x] Export `unsafe` symbols
+- [x] Export `go.opentelemetry.io/collector/...` sub-packages (`component`, `consumer`, `receiver`, `exporter`, `pdata/plog`, `pdata/pmetric`, `pdata/ptrace`)
+- [x] Export `go.uber.org/zap`
+- [x] Export `github.com/mitchellh/mapstructure`
+- [x] Helper: `EvalFactory(src string) (any, error)` — wraps a factory snippet in a callable function body and returns the result
+
+---
+
+## Step 3: Package resolver (`internal/forge/resolver`)
+
+- [x] If `source.dir` is set: resolve relative path, verify it exists, return it
+- [x] If `source.import` is set:
+  - [x] Resolve `source.version` (or `latest`) to a concrete version via `/@latest` or `/@v/list`
+  - [x] Check `LoadConfig.ModCacheDir` for an already-extracted copy; skip download if present
+  - [x] Fetch `/<version>.zip` from the proxy and extract into `ModCacheDir`
+- [x] Expose the resolved source directory to Yaegi (`interp.Options.GoPath` or `UseGoPath`)
+- [x] Infer `packageName` from the last path segment of `source.import` when not set explicitly
+- [x] Respect `GOPROXY` / `GONOSUMCHECK` env vars for private registries and air-gapped setups
+- [x] Unit tests: local dir resolution, proxy fetch with a mock HTTP server, cache hit avoids re-download
+
+---
+
+## Step 4: Config mapper (`internal/forge/mapper`)
+
+- [x] Implement River → `map[string]any` decoding using `syntax.Unmarshal`, honouring `block: true` for nested blocks vs attributes
+- [ ] Implement Yaegi type lookup: resolve the type string from `config.type` in the interpreter's symbol table and instantiate it with `reflect.New`
+- [x] Call `mapstructure.Decode` to populate the Yaegi-constructed config instance from the map
+- [x] Validate required fields (from manifest `required` lists) before passing the config to the factory
+- [x] Unit tests: scalar types, nested blocks, required field validation errors
+
+---
+
+## Step 5: `otelcol.receiver` shim (`internal/forge/otelreceiver`)
+
+- [x] Call `EvalFactory` to obtain a `receiver.Factory` from the manifest snippet
+- [x] On `component.Build`: delegates to existing `receiver.New` which handles signal-specific receiver creation
+- [x] Implement `Run(ctx)`: delegates to existing `receiver.Receiver` via `receiver.New`
+- [x] Implement `Update(args)`: re-maps config and delegates to existing `receiver.Receiver`
+- [x] Wire OTel consumer outputs to Alloy's `otelcol.Consumer` exports via `forgeReceiverArgs`
+
+---
+
+## Step 6: Forge loader (`internal/forge`)
+
+- [x] Scan `LoadConfig.PluginsDir` for `*.yml` / `*.yaml` files
+- [x] Parse each file with the manifest parser (step 1)
+- [x] Pass `LoadConfig.ModCacheDir` to the package resolver (step 3) for all `source.import`-based plugins; skip for `source.dir` plugins
+- [x] Set up a Yaegi interpreter instance (step 2) — one interpreter per plugin
+- [x] Based on `manifest.type`, delegate to the appropriate shim (step 5)
+- [x] Call `component.TryRegister` with the resulting `component.Registration`
+- [x] Return a descriptive error (not a panic) if registration fails
+
+---
+
+## Step 7: Bootstrap
+
+- [x] Implement `LoadConfigFromEnv() LoadConfig` — reads env vars and falls back to defaults
+- [x] Call `forge.Load(LoadConfigFromEnv())` early in Alloy's startup sequence, before the component controller initialises
+- [x] If `ALLOY_FORGE_DIR` does not exist, skip loading silently (Forge is opt-in)
+- [x] Surface any load errors as a fatal startup error with a clear message
+
+---
+
+## Step 8: End-to-end demo
+
+- [ ] Verify `plugins/forge.source.awss3.yml` loads correctly end-to-end
+- [ ] Write a minimal `.alloy` config that loads the plugin and pipes output to `loki.write` or `otelcol.exporter.otlp`
+- [ ] Document any extra steps (module cache directory, permissions, etc.) in the README
