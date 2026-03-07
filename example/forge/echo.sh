@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Send test syslog messages to the Forge syslog receiver over UDP.
+# Send test Cloudflare LogPush payloads to the Forge cloudflare receiver.
 #
 # Usage:
-#   ./example/forge/echo.sh [count]
-#
-# Defaults to sending 5 messages to 127.0.0.1:43210.
+#   ./example/forge/echo.sh
 
 set -euo pipefail
 
-HOST="127.0.0.1"
-PORT="43210"
-COUNT="${1:-5}"
+ENDPOINT="http://localhost:43210"
 
-for i in $(seq 1 "$COUNT"); do
-  ts=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-  msg="<86>1 ${ts} 127.0.0.1 forge-test $$ ID${i} - test syslog message ${i} of ${COUNT}"
-  echo "$msg" | nc -u -w0 "$HOST" "$PORT"
-  echo "sent: $msg"
-done
+echo "=== Cloudflare connectivity test ==="
+curl -v -X POST "$ENDPOINT" -d 'test'
+echo ""
 
-echo "done — sent ${COUNT} syslog messages to ${HOST}:${PORT}"
+echo ""
+echo "=== Sending Cloudflare LogPush payload ==="
+curl -v -X POST "$ENDPOINT" \
+  -H "Content-Type: application/json" \
+  -d '{"EdgeStartTimestamp":"2026-03-07T12:00:00Z","ClientIP":"1.2.3.4","ZoneName":"example.com","EdgeResponseStatus":200,"ClientRequestHost":"example.com","ClientRequestURI":"/hello"}'
+echo ""

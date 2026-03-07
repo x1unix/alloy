@@ -76,12 +76,11 @@ func validateSource(src SourceConfig) error {
 	hasImport := src.Import != ""
 	hasDir := src.Dir != ""
 
-	if hasImport && hasDir {
-		return errors.New("source.import and source.dir are mutually exclusive")
-	}
 	if !hasImport && !hasDir {
 		return errors.New("source must have either import or dir set")
 	}
+	// When dir is set, import is optional but recommended (used for Yaegi import path).
+	// When only import is set, it's used for remote module resolution.
 	return nil
 }
 

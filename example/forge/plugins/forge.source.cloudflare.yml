@@ -1,0 +1,36 @@
+# Forge component: OTel Cloudflare LogPush receiver.
+# Listens for Cloudflare LogPush JSON payloads via HTTP.
+name: forge.source.cloudflare
+stability: experimental
+community: true
+
+type: otelcol.receiver
+
+source:
+  import: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/cloudflarereceiver
+  dir: /home/x1unix/work/grafana/opentelemetry-collector-contrib/receiver/cloudflarereceiver
+
+otelcol.receiver:
+  factory: |
+    return cloudflarereceiver.NewFactory()
+
+  config:
+    type: "*cloudflarereceiver.Config"
+
+    properties:
+      logs:
+        type: object
+        block: true
+        properties:
+          endpoint:
+            type: string
+          secret:
+            type: string
+          timestamp_field:
+            type: string
+          timestamp_format:
+            type: string
+          separator:
+            type: string
+          max_request_body_size:
+            type: int64

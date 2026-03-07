@@ -1,22 +1,21 @@
 // Package resolver locates or downloads Go packages referenced by forge manifests.
+// It uses the Go toolchain to resolve transitive dependencies and builds
+// a GOPATH-compatible source tree that Yaegi can interpret.
 package resolver
 
 import (
-	"archive/zip"
+	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/grafana/alloy/internal/forge/manifest"
 )
-
-const defaultProxy = "https://proxy.golang.org"
 
 // Result holds the resolved package location.
 type Result struct {
@@ -31,45 +30,22 @@ type Result struct {
 
 	// Version is the resolved module version (empty for local dirs).
 	Version string
+
+	// GoPath is the GOPATH root containing the resolved source tree.
+	// Yaegi should be configured with this path.
+	GoPath string
 }
 
 // Resolver fetches or locates Go packages for forge plugins.
 type Resolver struct {
-	// ModCacheDir is the root directory for cached module downloads.
+	// ModCacheDir is the root directory for cached module downloads
+	// and the GOPATH source tree.
 	ModCacheDir string
-
-	// ProxyURL is the Go module proxy base URL.
-	// Defaults to https://proxy.golang.org.
-	ProxyURL string
-
-	// Client is the HTTP client used for proxy requests.
-	// Defaults to http.DefaultClient.
-	Client *http.Client
 }
 
-func (r *Resolver) proxyURL() string {
-	if r.ProxyURL != "" {
-		return r.ProxyURL
-	}
-	if env := os.Getenv("GOPROXY"); env != "" {
-		// Take the first proxy from a comma-separated list.
-		if i := strings.IndexByte(env, ','); i > 0 {
-			return env[:i]
-		}
-		return env
-	}
-	return defaultProxy
-}
-
-func (r *Resolver) client() *http.Client {
-	if r.Client != nil {
-		return r.Client
-	}
-	return http.DefaultClient
-}
-
-// Resolve locates the package described by src.
-// baseDir is used to resolve relative source.dir paths.
+// Resolve locates the package described by src and downloads all transitive
+// dependencies. baseDir is used to resolve relative source.dir paths.
+// The returned Result includes a GoPath suitable for Yaegi interpretation.
 func (r *Resolver) Resolve(src manifest.SourceConfig, baseDir string) (*Result, error) {
 	if src.Dir != "" {
 		return r.resolveLocal(src, baseDir)
@@ -96,175 +72,205 @@ func (r *Resolver) resolveLocal(src manifest.SourceConfig, baseDir string) (*Res
 		pkgName = filepath.Base(dir)
 	}
 
+	// For local sources with an import path, build a GOPATH tree that
+	// includes the local dir and all of its transitive dependencies.
+	var goPath string
+	if src.Import != "" {
+		var err error
+		goPath, err = r.buildGoPath(src, dir)
+		if err != nil {
+			return nil, fmt.Errorf("build gopath: %w", err)
+		}
+	}
+
 	return &Result{
 		Dir:         dir,
 		PackageName: pkgName,
+		ImportPath:  src.Import,
+		GoPath:      goPath,
 	}, nil
 }
 
 func (r *Resolver) resolveRemote(src manifest.SourceConfig) (*Result, error) {
-	version := src.Version
-	if version == "" || version == "latest" {
-		v, err := r.resolveLatest(src.Import)
-		if err != nil {
-			return nil, err
-		}
-		version = v
-	}
-
 	pkgName := src.PackageName
 	if pkgName == "" {
 		pkgName = path.Base(src.Import)
 	}
 
-	// Check cache.
-	cacheDir := filepath.Join(r.ModCacheDir, encodePath(src.Import)+"@"+version)
-	if info, err := os.Stat(cacheDir); err == nil && info.IsDir() {
-		return &Result{
-			Dir:         cacheDir,
-			PackageName: pkgName,
-			ImportPath:  src.Import,
-			Version:     version,
-		}, nil
-	}
-
-	// Download from proxy.
-	if err := r.download(src.Import, version, cacheDir); err != nil {
-		return nil, fmt.Errorf("download %s@%s: %w", src.Import, version, err)
+	goPath, err := r.buildGoPath(src, "")
+	if err != nil {
+		return nil, fmt.Errorf("build gopath: %w", err)
 	}
 
 	return &Result{
-		Dir:         cacheDir,
 		PackageName: pkgName,
 		ImportPath:  src.Import,
-		Version:     version,
+		GoPath:      goPath,
 	}, nil
 }
 
-type versionInfo struct {
+// buildGoPath creates a GOPATH-compatible source tree for the given package
+// and all its transitive dependencies. It creates a temporary Go module,
+// runs `go mod download` to fetch everything, then copies source files
+// into a gopath/src/ layout that Yaegi can interpret.
+//
+// Go modules often have overlapping path prefixes (e.g.,
+// `collector/component` and `collector/component/componenttest` are
+// separate modules). Simple symlinking fails because a symlinked parent
+// directory points to a read-only module cache. To handle this robustly,
+// we copy source files from each module into the GOPATH tree.
+func (r *Resolver) buildGoPath(src manifest.SourceConfig, localDir string) (string, error) {
+	goPathRoot := filepath.Join(r.ModCacheDir, "gopath")
+	srcRoot := filepath.Join(goPathRoot, "src")
+
+	// Create a temporary module to resolve dependencies.
+	tmpDir, err := os.MkdirTemp("", "forge-resolve-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := writeResolverModule(tmpDir, src, localDir); err != nil {
+		return "", err
+	}
+
+	// Download all dependencies.
+	if err := runGo(tmpDir, "mod", "download", "-x"); err != nil {
+		return "", fmt.Errorf("go mod download: %w", err)
+	}
+
+	// Get the full resolved module list.
+	modules, err := listModules(tmpDir)
+	if err != nil {
+		return "", err
+	}
+
+	// Copy each module's source into the GOPATH tree.
+	for _, m := range modules {
+		if m.Main || m.Dir == "" {
+			continue
+		}
+
+		destDir := filepath.Join(srcRoot, m.Path)
+		if err := copyModuleSource(m.Dir, destDir); err != nil {
+			return "", fmt.Errorf("copy module %s: %w", m.Path, err)
+		}
+	}
+
+	// For local sources, also copy the package itself.
+	if localDir != "" && src.Import != "" {
+		destDir := filepath.Join(srcRoot, src.Import)
+		if err := copyModuleSource(localDir, destDir); err != nil {
+			return "", fmt.Errorf("copy local source: %w", err)
+		}
+	}
+
+	return goPathRoot, nil
+}
+
+// copyModuleSource recursively copies source files from srcDir into destDir.
+// Only copies .go files and preserves directory structure. Existing files
+// are overwritten but existing directories from other modules are preserved.
+func copyModuleSource(srcDir, destDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(destDir, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+
+		// Only copy .go source files — Yaegi interprets from source.
+		if !strings.HasSuffix(d.Name(), ".go") {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, 0o644)
+	})
+}
+
+type modEntry struct {
+	Path    string `json:"Path"`
 	Version string `json:"Version"`
+	Dir     string `json:"Dir"`
+	Main    bool   `json:"Main"`
 }
 
-func (r *Resolver) resolveLatest(modulePath string) (string, error) {
-	url := r.proxyURL() + "/" + encodePath(modulePath) + "/@latest"
-	resp, err := r.client().Get(url)
+func listModules(dir string) ([]modEntry, error) {
+	cmd := exec.Command("go", "list", "-m", "-json", "all")
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("resolve latest version for %s: %w", modulePath, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("resolve latest version for %s: HTTP %d", modulePath, resp.StatusCode)
+		return nil, fmt.Errorf("go list -m -json all: %s: %w", stderr.String(), err)
 	}
 
-	var info versionInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", fmt.Errorf("decode version info for %s: %w", modulePath, err)
+	var modules []modEntry
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var m modEntry
+		if err := dec.Decode(&m); err != nil {
+			break
+		}
+		modules = append(modules, m)
 	}
-	if info.Version == "" {
-		return "", fmt.Errorf("empty version in response for %s", modulePath)
-	}
-	return info.Version, nil
+	return modules, nil
 }
 
-func (r *Resolver) download(modulePath, version, destDir string) error {
-	url := r.proxyURL() + "/" + encodePath(modulePath) + "/@v/" + version + ".zip"
-	resp, err := r.client().Get(url)
-	if err != nil {
-		return fmt.Errorf("fetch zip: %w", err)
+func writeResolverModule(dir string, src manifest.SourceConfig, localDir string) error {
+	var goMod strings.Builder
+	goMod.WriteString("module forge-resolve\n\ngo 1.24\n\n")
+
+	if localDir != "" && src.Import != "" {
+		fmt.Fprintf(&goMod, "require %s v0.0.0\n", src.Import)
+		fmt.Fprintf(&goMod, "replace %s => %s\n", src.Import, localDir)
+	} else if src.Version != "" && src.Version != "latest" {
+		fmt.Fprintf(&goMod, "require %s %s\n", src.Import, src.Version)
+	} else {
+		fmt.Fprintf(&goMod, "require %s latest\n", src.Import)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch zip: HTTP %d", resp.StatusCode)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod.String()), 0o644); err != nil {
+		return fmt.Errorf("write go.mod: %w", err)
 	}
 
-	// Write zip to a temp file so we can open it with zip.OpenReader.
-	tmpFile, err := os.CreateTemp("", "forge-module-*.zip")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	// Write a minimal .go file that imports the target package
+	// so `go mod tidy` resolves it.
+	mainGo := fmt.Sprintf("package main\n\nimport _ \"%s\"\n", src.Import)
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0o644); err != nil {
+		return fmt.Errorf("write main.go: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
 
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		return fmt.Errorf("download zip: %w", err)
-	}
-	tmpFile.Close()
-
-	return extractZip(tmpFile.Name(), modulePath, version, destDir)
-}
-
-// extractZip extracts a Go module zip archive into destDir.
-// Go module zips have a top-level directory of <module>@<version>/ which we strip.
-func extractZip(zipPath, modulePath, version, destDir string) error {
-	zr, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("open zip: %w", err)
-	}
-	defer zr.Close()
-
-	prefix := modulePath + "@" + version + "/"
-
-	for _, f := range zr.File {
-		name := f.Name
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		relPath := strings.TrimPrefix(name, prefix)
-		if relPath == "" {
-			continue
-		}
-
-		target := filepath.Join(destDir, filepath.FromSlash(relPath))
-
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-
-		if err := extractFile(f, target); err != nil {
-			return err
-		}
+	// Run go mod tidy to resolve the actual version and transitive deps.
+	if err := runGo(dir, "mod", "tidy"); err != nil {
+		return fmt.Errorf("go mod tidy: %w", err)
 	}
 
 	return nil
 }
 
-func extractFile(f *zip.File, target string) error {
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
+// runGo executes a go command in the given directory.
+func runGo(dir string, args ...string) error {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
-	out, err := os.Create(target)
-	if err != nil {
-		return err
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("go %s: %s: %w", strings.Join(args, " "), stderr.String(), err)
 	}
-	defer out.Close()
-
-	_, err = io.Copy(out, rc)
-	return errors.Join(err, out.Close())
-}
-
-// encodePath encodes a module path for use in proxy URLs.
-// Upper case letters are replaced with !<lower>.
-func encodePath(modPath string) string {
-	var b strings.Builder
-	for _, r := range modPath {
-		if 'A' <= r && r <= 'Z' {
-			b.WriteByte('!')
-			b.WriteRune(r + ('a' - 'A'))
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return nil
 }

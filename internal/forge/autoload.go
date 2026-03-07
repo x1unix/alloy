@@ -22,8 +22,8 @@ type LoadConfig struct {
 	ModCacheDir string
 }
 
-// Load scans PluginsDir for manifest files, resolves their sources, evaluates
-// factory snippets via Yaegi, and registers the resulting components.
+// Load scans PluginsDir for manifest files, resolves their sources,
+// builds factory plugins, and registers the resulting components.
 func Load(cfg LoadConfig) error {
 	entries, err := os.ReadDir(cfg.PluginsDir)
 	if err != nil {
@@ -48,7 +48,6 @@ func Load(cfg LoadConfig) error {
 }
 
 func loadPlugin(path string, cfg LoadConfig) error {
-	// Step 1: Parse and validate the manifest.
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open manifest: %w", err)
@@ -63,7 +62,6 @@ func loadPlugin(path string, cfg LoadConfig) error {
 		return fmt.Errorf("validate manifest: %w", err)
 	}
 
-	// Step 3: Resolve the package source.
 	res := &resolver.Resolver{
 		ModCacheDir: cfg.ModCacheDir,
 	}
@@ -72,37 +70,23 @@ func loadPlugin(path string, cfg LoadConfig) error {
 		return fmt.Errorf("resolve source: %w", err)
 	}
 
-	// Step 2: Set up the Yaegi interpreter.
-	// Use the module cache as GOPATH so Yaegi can find downloaded packages.
-	goPath := cfg.ModCacheDir
-	if m.Source.Dir != "" {
-		// For local sources, use the parent of the source dir.
-		goPath = filepath.Dir(result.Dir)
-	}
-
-	cap, err := capsule.New(goPath)
-	if err != nil {
-		return fmt.Errorf("create interpreter: %w", err)
-	}
-
-	// Determine the import path and package name.
-	importPath := result.ImportPath
-	if importPath == "" {
-		importPath = m.Source.Import
-	}
-	pkgName := result.PackageName
-
-	// Evaluate the factory snippet.
 	switch m.Type {
 	case manifest.ComponentTypeOtelReceiver:
-		return loadOtelReceiver(m, cap, importPath, pkgName)
+		return loadOtelReceiver(m, result)
 	default:
 		return fmt.Errorf("unsupported component type %q", m.Type)
 	}
 }
 
-func loadOtelReceiver(m *manifest.Manifest, cap *capsule.Capsule, importPath, pkgName string) error {
-	factoryAny, err := cap.EvalFactory(importPath, pkgName, m.OtelReceiver.Factory)
+func loadOtelReceiver(m *manifest.Manifest, result *resolver.Result) error {
+	// Create a Yaegi interpreter with the resolved GOPATH.
+	cap, err := capsule.New(result.GoPath)
+	if err != nil {
+		return fmt.Errorf("create capsule: %w", err)
+	}
+
+	// Evaluate the factory snippet using Yaegi.
+	factoryAny, err := cap.EvalFactory(result.ImportPath, result.PackageName, m.OtelReceiver.Factory)
 	if err != nil {
 		return fmt.Errorf("eval factory: %w", err)
 	}

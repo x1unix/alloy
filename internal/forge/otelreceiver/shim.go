@@ -4,6 +4,7 @@ package otelreceiver
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/grafana/alloy/internal/component"
 	"github.com/grafana/alloy/internal/component/otelcol/receiver"
@@ -21,9 +22,14 @@ func Register(m *manifest.Manifest, factory otelreceiver.Factory) error {
 	argsType := buildArgsType(schema)
 	zeroArgs := reflect.New(argsType).Elem().Interface()
 
+	stability := convertStability(m.Stability)
+	if m.Community {
+		stability = featuregate.StabilityUndefined
+	}
+
 	return component.TryRegister(component.Registration{
 		Name:      m.Name,
-		Stability: convertStability(m.Stability),
+		Stability: stability,
 		Community: m.Community,
 		Args:      zeroArgs,
 
@@ -65,11 +71,56 @@ func convertArgs(rv reflect.Value, schema *manifest.ConfigSchema, factory otelre
 		}
 	}
 
+	// Yaegi-interpreted configs don't preserve methods, so Validate()
+	// can't be called. Apply common OTel defaults for zero-valued fields
+	// that would normally be set by Validate().
+	applyConfigDefaults(cfg)
+
 	return &forgeReceiverArgs{
 		config:       cfg,
 		output:       output,
 		debugMetrics: debugMetrics,
 	}, nil
+}
+
+// applyConfigDefaults uses reflection to set reasonable defaults for
+// zero-valued fields in Yaegi-interpreted config structs. Yaegi-interpreted
+// types don't preserve methods, so we can't call the config's Validate()
+// which normally sets these defaults.
+func applyConfigDefaults(cfg any) {
+	v := reflect.ValueOf(cfg)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	applyDefaultsRecursive(v)
+}
+
+func applyDefaultsRecursive(v reflect.Value) {
+	for i := range v.NumField() {
+		field := v.Field(i)
+		if !field.CanSet() {
+			continue
+		}
+
+		tag := v.Type().Field(i).Tag.Get("mapstructure")
+
+		switch field.Kind() {
+		case reflect.Struct:
+			applyDefaultsRecursive(field)
+		case reflect.Ptr:
+			if !field.IsNil() && field.Elem().Kind() == reflect.Struct {
+				applyDefaultsRecursive(field.Elem())
+			}
+		case reflect.Int64:
+			// Common OTel pattern: max_request_body_size defaults to 20MB.
+			if field.Int() == 0 && strings.Contains(tag, "max_request_body_size") {
+				field.SetInt(20 * 1024 * 1024)
+			}
+		}
+	}
 }
 
 func convertStability(s manifest.Stability) featuregate.Stability {

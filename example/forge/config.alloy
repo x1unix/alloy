@@ -1,13 +1,14 @@
-// Forge demo: receive syslog messages via UDP and forward to debug exporter.
+// Forge demo: receive Cloudflare LogPush via HTTP and forward to debug exporter.
 //
 // Usage:
-//   ALLOY_FORGE_DIR=./example/forge/plugins alloy run ./example/forge/config.alloy
+//   cd example/forge && bash run-alloy.sh
+//
+// Test:
+//   curl -X POST http://localhost:43210 -d '{"EdgeStartTimestamp":"2026-03-07T12:00:00Z","ClientIP":"1.2.3.4"}'
 
-forge.source.syslog "udp_logs" {
-  protocol = "rfc5424"
-
-  udp {
-    listen_address = "127.0.0.1:43210"
+forge.source.cloudflare "logs" {
+  logs {
+    endpoint = "localhost:43210"
   }
 
   output {

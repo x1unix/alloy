@@ -148,7 +148,7 @@ otelcol.receiver:
 	}
 }
 
-func TestValidate_ConflictingSource(t *testing.T) {
+func TestValidate_BothImportAndDir(t *testing.T) {
 	yaml := `
 name: forge.test.receiver
 stability: experimental
@@ -163,8 +163,10 @@ otelcol.receiver:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if err := m.Validate(); err == nil {
-		t.Error("Validate() with both import and dir: expected error, got nil")
+	// Both import and dir is valid — dir is the source location,
+	// import provides the Go import path for Yaegi.
+	if err := m.Validate(); err != nil {
+		t.Errorf("Validate() with both import and dir: unexpected error: %v", err)
 	}
 }
 
