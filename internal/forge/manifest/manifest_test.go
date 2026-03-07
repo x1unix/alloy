@@ -22,7 +22,7 @@ otelcol.receiver:
 `
 
 func TestParse_AwsS3Manifest(t *testing.T) {
-	f, err := os.Open("../../../plugins/forge.source.awss3.yml")
+	f, err := os.Open("testdata/forge.source.awss3.yml")
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}
